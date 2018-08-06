@@ -152,47 +152,5 @@
 
 (def G (* 6.67408 (Math/pow 10 -11)))
 
-(defn point-add [p1 p2]
-  (let [{x1 :x
-         y1 :y} p1
-        {x2 :x
-         y2 :y} p2]
-    (Point. (+ x1 x2)
-            (+ y1 y2))))
-
-(defn dist [p1 p2]
-  (let [{x1 :x
-         y1 :y} p1
-        {x2 :x
-         y2 :y} p2
-        dx (- x2 x1)
-        dy (- y2 y1)]
-    (Math/sqrt (+ (* dx dx)
-                  (* dy dy)))))
-
-(defn dist-component [p1 p2]
-  (let [{x1 :x
-         y1 :y} (:point p1)
-        {x2 :x
-         y2 :y} (:point p2)
-        dx (- x2 x1)
-        dy (- y2 y1)]
-    (Point. dx dy)))
-
-(defn get-force [part1 part2]
-  (let [m1 (:mass part1)
-        p1 (:point part1)
-        m2 (:mass part2)
-        p2 (:point part2)
-        dist (dist p1 p2)]
-    (/ (* G m1 m2)
-       (* dist dist))))
-
 (defn query-force [qtree theta particle]
   {:x 0 :y (* theta 3)})
-
-(let [p1 {:mass 1000000
-          :point (Point. 1 1)}
-      p2 {:mass 1000000
-          :point (Point. 0 0)}]
-  (get-force-vector p1 p2))
