@@ -5,6 +5,11 @@
 (defprotocol IBoundary
   (inside? [this point])
   (overlap? [this other])
+  (nw [this])
+  (ne [this])
+  (sw [this])
+  (se [this])
+  (center [this])
   )
 
 (defrecord Boundary [x y dx dy]
@@ -21,14 +26,22 @@
            oy :y
            odx :dx
            ody :dy} o]
-      (or (and (<= x ox         (+ x dx))
-               (<= y oy         (+ y dy)))
-          (and (<= x (+ ox odx) (+ x dx))
-               (<= y (+ oy ody) (+ y dy)))
-          (and (<= x ox         (+ x dx))
-               (<= y (+ oy ody) (+ y dy)))
-          (and (<= x (+ ox odx) (+ x dx))
-               (<= y oy         (+ y dy)))))))
+      (not (or (< (+ ox odx) x)
+               (> ox (+ x dx))
+               (< (+ oy ody) y)
+               (> oy (+ y dy))))))
+  (nw [this]
+    (->Boundary x              y              (/ dx 2) (/ dy 2)))
+  (ne [this]
+    (->Boundary (+ x (/ dx 2)) y              (/ dx 2) (/ dy 2)))
+  (sw [this]
+    (->Boundary x              (+ y (/ dy 2)) (/ dx 2) (/ dy 2)))
+  (se [this]
+    (->Boundary (+ x (/ dx 2)) (+ y (/ dy 2)) (/ dx 2) (/ dy 2)))
+  (center [this]
+    (Point. (+ x (/ dx 2))
+            (+ y (/ dy 2)))))
+
 
 ;; (every? #(overlap? (Boundary. 1 1 1 1) %1)
 ;;         [(Boundary. 1.5 1.5 1 1)
@@ -36,43 +49,73 @@
 ;;          (Boundary. 1.5 0.5 1 1)
 ;;          (Boundary. 0.5 1.5 1 1)])
 
-(defrecord Quadtree [bounds points thresh nw ne sw se])
-
-(defn make-qtree [x y dx dy]
-  (->Quadtree (->Boundary x y dx dy) [] 1 nil nil nil nil))
+(defrecord Quadtree [bounds points thresh mass center nw ne sw se])
 
 (defn subdivided? [qtree]
-  (not (nil? (:quads qtree))))
+  (not (nil? (:nw qtree))))
+
+(declare make-qtree)
 
 (defn subdivide [qtree]
   (if (subdivided? qtree)
     qtree
-    (let [{x :x
-           y :y
-           dx :dx
-           dy :dy} (:bounds qtree)
-          halfdx (/ dx 2)
-          halfdy (/ dy 2)]
+    (let [bounds (:bounds qtree)]
       (-> qtree
-          (assoc :nw (make-qtree x            y            halfdx halfdy))
-          (assoc :ne (make-qtree (+ x halfdx) y            halfdx halfdy))
-          (assoc :sw (make-qtree x            (+ y halfdy) halfdx halfdy))
-          (assoc :se (make-qtree (+ x halfdx) (+ y halfdy) halfdx halfdy))))))
+          (assoc :nw (make-qtree (nw bounds)))
+          (assoc :ne (make-qtree (ne bounds)))
+          (assoc :sw (make-qtree (sw bounds)))
+          (assoc :se (make-qtree (se bounds)))))))
+
+(defn make-qtree
+  ([x y dx dy]
+   (subdivide (make-qtree (->Boundary x y dx dy))))
+  ([bounds]
+   (->Quadtree bounds [] 4 0 (center bounds) nil nil nil nil)))
 
 (defn ins [qtree ref arr]
-  (if (not (inside? (:bounds qtree) (:point @ref)))
-    nil
-    (let [n (count (:points qtree))]
-      (if (< n (:thresh qtree))
-        (conj arr :points)
-        (or (ins (atom (:nw qtree)) ref (conj arr :nw))
-            (ins (atom (:ne qtree)) ref (conj arr :ne))
-            (ins (atom (:sw qtree)) ref (conj arr :sw))
-            (ins (atom (:se qtree)) ref (conj arr :se)))))))
+  (let [bounds (:bounds qtree)]
+    (if (not (inside? bounds (:point @ref)))
+      nil
+      (let [n (count (:points qtree))]
+        (if (< n (:thresh qtree))
+          arr
+          (let [qtree (subdivide qtree)]
+            (or (ins (:nw qtree) ref (conj arr :nw))
+                (ins (:ne qtree) ref (conj arr :ne))
+                (ins (:sw qtree) ref (conj arr :sw))
+                (ins (:se qtree) ref (conj arr :se)))))))))
+
+(defn update-point-mass [oldpoint oldmass newpoint newmass]
+  (/ (+ (* oldpoint oldmass)
+        (* newpoint newmass))
+     (+ oldmass newmass)))
+
+(defn update-center [qtree ref]
+  (let [mass (:mass qtree)
+        newmass (:mass @ref)
+        {newx :x
+         newy :y} (:point @ref)]
+    (-> qtree
+        (update-in [:center :x] #(update-point-mass % mass newx newmass))
+        (update-in [:center :y] #(update-point-mass % mass newy newmass)))))
+
+(defn update-center-masses [qtree keys ref]
+  (-> qtree
+      (#(update-center % ref))
+      (update :mass #(+ % (:mass @ref)))
+      (#(if-let [sub (first keys)]
+          (update % sub (fn [x] (update-center-masses x (rest keys) ref)))
+          %))))
+
 
 (defn insert [qtree ref]
-  (update-in qtree (ins qtree ref []) #(conj % ref)))
-  
+  (let [keys (ins qtree ref [])]
+    (-> qtree
+        (#(if (zero? (count keys))
+            %
+            (update-in % keys subdivide)))
+        (update-in (conj keys :points) #(conj % ref))
+        (#(update-center-masses % keys ref)))))
 
 (defn qtree-size [qtree]
   (if (nil? qtree)
@@ -97,8 +140,59 @@
 ;; (defn query [qtree bounds]
 ;;   )
 
+
 (-> (make-qtree 1 1 2 2)
-    (insert (atom {:point (Point. 1.5 1.5)}))
-    (insert (atom {:point (Point. 2 2)}))
-    ;;(query (Boundary. 1 1 2 2 ))
+    (insert (atom {:point (Point. 1.5 1.5) :mass 100}))
+    (insert (atom {:point (Point. 2 2) :mass 10}))
+    (insert (atom {:point (Point. 2.1 2.1) :mass 10}))
+    (insert (atom {:point (Point. 2.1 2.2) :mass 10}))
+    (:center)
     )
+(overlap? (Boundary. 2.5 2 0.5 0.5) (Boundary. 1 1 2 2))
+
+(def G (* 6.67408 (Math/pow 10 -11)))
+
+(defn point-add [p1 p2]
+  (let [{x1 :x
+         y1 :y} p1
+        {x2 :x
+         y2 :y} p2]
+    (Point. (+ x1 x2)
+            (+ y1 y2))))
+
+(defn dist [p1 p2]
+  (let [{x1 :x
+         y1 :y} p1
+        {x2 :x
+         y2 :y} p2
+        dx (- x2 x1)
+        dy (- y2 y1)]
+    (Math/sqrt (+ (* dx dx)
+                  (* dy dy)))))
+
+(defn dist-component [p1 p2]
+  (let [{x1 :x
+         y1 :y} (:point p1)
+        {x2 :x
+         y2 :y} (:point p2)
+        dx (- x2 x1)
+        dy (- y2 y1)]
+    (Point. dx dy)))
+
+(defn get-force [part1 part2]
+  (let [m1 (:mass part1)
+        p1 (:point part1)
+        m2 (:mass part2)
+        p2 (:point part2)
+        dist (dist p1 p2)]
+    (/ (* G m1 m2)
+       (* dist dist))))
+
+(defn query-force [qtree theta particle]
+  {:x 0 :y (* theta 3)})
+
+(let [p1 {:mass 1000000
+          :point (Point. 1 1)}
+      p2 {:mass 1000000
+          :point (Point. 0 0)}]
+  (get-force-vector p1 p2))
