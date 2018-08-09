@@ -8,6 +8,18 @@
 
 (require '[taoensso.tufte :as tufte :refer (defnp p profiled profile)])
 
+(defn make-galaxy [x y width number sunweight]
+  (let [halfw (/ width 2)]
+    (conj (repeatedly number
+                      #(make-particle (+ (rand 5) 5)
+                                      (- (+ x (rand width))halfw) (- (+ y (rand width)) halfw)
+                                      (dec (rand 2)) (dec (rand 2))
+                                      0 0
+                                      true))
+          (make-particle sunweight x y 0 0 0 0 true))))
+
+(make-galaxy 500 500 500 1)
+
 (defnp new-state [particles qtree-depth theta]
   (let [x (try
                (q/width)
@@ -18,14 +30,8 @@
         halfy (/ y 2)
         quartx (/ halfx 2)
         quarty (/ halfy 2)
-        particles (repeatedly particles #(atom
-                       (make-particle 
-                        (+ (rand 5) 5)
-                        (+ quartx (rand halfx)) (+ quarty (rand halfy))
-                        (dec (rand 2)) (dec (rand 2))
-                        0 0
-                        true)))]
-    {:particles (conj particles (atom (make-particle 20000 500 500 0 0 0 0 true)))
+        particles (make-galaxy 500 500 500 particles 40000)]
+    {:particles particles
      :query (Boundary. 111 111 111 111)
      :tree (reduce #(insert %1 %2)
                    (make-qtree 0 0 x y)
@@ -38,18 +44,22 @@
 (defn setup []
   (q/frame-rate 30)
   (q/color-mode :rgb)
-  (new-state 100 4 0.5))
+  (new-state 100 1 4))
 
 (defn update-state [state]
-  (-> state
-      (assoc :tree (reduce #(insert %1 %2)
-                           (make-qtree (:depth state) 0 0 (:x state) (:y state))
-                           (:particles state)))
-      (update-in [:particles] #(let [update-particle (make-particle-updater (:tree state)
-                                                                            (:theta state)
-                                                                            (:x state)
-                                                                            (:y state))]
-                                 (doall (map (fn [x] (update-particle x)) %))))))
+  (let [tree (reduce #(insert %1 %2)
+                     (make-qtree (:depth state) 0 0 (:x state) (:y state))
+                     (:particles state))]
+    (-> state
+        (assoc :tree tree)
+        (update-in [:particles]
+                   #(let [update-particle
+                          (make-particle-updater tree
+                                                 (:theta state)
+                                                 (:x state)
+                                                 (:y state))]
+                      (doall (for [particle %]
+                        (update-particle particle))))))))
 
 (defn update-query [state event]
   (try
@@ -94,14 +104,14 @@
       ;;   (swap! particle #(update-in % [:on] (fn [x] true))))
       (apply q/rect (vals (:query state)))
       (doseq [particle particles]
-        (if (:on @particle)
+        (if (:on particle)
           (q/fill 255 255 255)
           (q/fill 0 100 0))
         (q/stroke-weight 0)
-        (let [pos (:point @particle)
-              x (int (.x pos))
-              y (int (.y pos))
-              mass (int (:mass @particle))]
+        (let [pos (:point particle)
+              x (int (:x pos))
+              y (int (:y pos))
+              mass (int (:mass particle))]
           ;;(q/with-translation [(/ (q/width) 2)
           ;;                     (/ (q/height) 2)]
           (if (> mass 40)
@@ -123,7 +133,7 @@
 
 (tufte/add-basic-println-handler! {})
 
-(let [a (new-state 100 20 1)]
+(let [a (new-state 1000 1 4)]
   (profile
    {}
    (let [b (update-state a)])))

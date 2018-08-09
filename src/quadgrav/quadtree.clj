@@ -1,17 +1,10 @@
 (ns quadgrav.quadtree
   (:require [quil.core :as q]
-            [taoensso.tufte :as tufte :refer (defnp p profiled profile)])
-  (:import (processing.core PVector))
+            [taoensso.tufte :as tufte :refer (defnp p profiled profile)]
+            [quadgrav.point :as p]
+            [quadgrav.point :refer [IPoint]] )
+  (:import quadgrav.point.Point)
   )
-
-(defrecord Point [x y])
-
-(defn add [p1 p2]
-  (let [{x :x
-         y :y} p2]
-    (-> p1
-        (update :x (partial + x))
-        (update :y (partial + y)))))
 
 (defprotocol IBoundary
   (inside? [this point])
@@ -26,8 +19,8 @@
 (defrecord Boundary [x y dx dy]
   IBoundary
   (inside? [this p]
-    (let [px (.x p)
-          py (.y p)]
+    (let [px (:x p)
+          py (:y p)]
       (and (<= x px)
            (< px (+ x dx))
            (<= y py)
@@ -50,7 +43,7 @@
   (se [this]
     (->Boundary (+ x (/ dx 2)) (+ y (/ dy 2)) (/ dx 2) (/ dy 2)))
   (center [this]
-    (PVector. (+ x (/ dx 2))
+    (Point. (+ x (/ dx 2))
             (+ y (/ dy 2)))))
 
 
@@ -86,9 +79,38 @@
   ([bounds size]
    (->Quadtree bounds [] size 0 (center bounds) nil nil nil nil)))
 
+(defn update-point-mass [oldpoint oldmass newpoint newmass]
+  (/ (+ (* oldpoint oldmass)
+        (* newpoint newmass))
+     (+ oldmass newmass)))
+
+;; Change
+(defn update-center [qtree ref]
+  (let [mass (:mass qtree)
+        newmass (:mass ref)
+        newp (:point ref)]
+    (-> qtree
+        (update-in [:center :x]
+                   #(update-point-mass % mass (:x newp) newmass))
+        (update-in [:center :y]
+                   #(update-point-mass % mass (:y newp) newmass)))))
+
+(defn update-center-masses [qtree keys ref]
+  (-> qtree
+      (update-center ref)
+      (update :mass #(+ % (:mass ref)))
+      (#(if-let [sub (first keys)]
+          (update % sub (fn [x] (update-center-masses x (rest keys) ref)))
+          %))))
+
+(defn check-subdivide [qtree keys]
+  (if (zero? (count keys))
+    qtree
+    (update-in qtree keys subdivide)))
+
 (defn ins [qtree ref arr]
   (let [bounds (:bounds qtree)]
-    (if (not (inside? bounds (:point @ref)))
+    (if (not (inside? bounds (:point ref)))
       nil
       (let [n (count (:points qtree))]
         (if (< n (:thresh qtree))
@@ -99,41 +121,23 @@
                 (ins (:sw qtree) ref (conj arr :sw))
                 (ins (:se qtree) ref (conj arr :se)))))))))
 
-(defn update-point-mass [oldpoint oldmass newpoint newmass]
-  (/ (+ (* oldpoint oldmass)
-        (* newpoint newmass))
-     (+ oldmass newmass)))
-
-
-(defn update-center [qtree ref]
-  (let [mass (:mass qtree)
-        newmass (:mass @ref)
-        p (:center qtree)
-        newp (:point @ref)]
-    (set! (.x p) (update-point-mass (.x p) mass (.x newp) newmass))
-    (set! (.y p) (update-point-mass (.y p) mass (.y newp) newmass))
-    qtree))
-
-(defn update-center-masses [qtree keys ref]
-  (-> qtree
-      (update-center ref)
-      (update :mass #(+ % (:mass @ref)))
-      (#(if-let [sub (first keys)]
-          (update % sub (fn [x] (update-center-masses x (rest keys) ref)))
-          %))))
-
-(defn check-subdivide [qtree keys]
-  (if (zero? (count keys))
-    qtree
-    (update-in qtree keys subdivide)))
-
-
 (defnp insert [qtree ref]
   (let [keys (ins qtree ref [])]
     (-> qtree
         (check-subdivide keys)
         (update-in (conj keys :points) #(conj % ref))
         (update-center-masses keys ref))))
+
+;; (-> (make-qtree 1 0 0 4 4)
+;;     (insert {:point (Point. 0 0)
+;;              :mass 10})
+;;     (insert {:point (Point. 0 4)
+;;              :mass 10})
+;;     (insert {:point (Point. 4 0)
+;;              :mass 20})
+;;     (insert {:point (Point. 4 4)
+;;              :mass 20})
+;;     (:center))
 
 (defn qtree-size [qtree]
   (if (nil? qtree)
@@ -155,10 +159,6 @@
                 (query (:sw qtree) bounds)
                 (query (:se qtree) bounds))))))
 
-;; (defn query [qtree bounds]
-;;   )
-
-
 
 (overlap? (Boundary. 2.5 2 0.5 0.5) (Boundary. 1 1 2 2))
 
@@ -167,45 +167,39 @@
 
 (defn get-force [pv1 m1 pv2 m2]
   (let [grav (/ (* G m1 m2)
-                (Math/pow (.dist pv1 pv2) 2))
-        angle (.heading (.sub (.copy pv2) pv1))]
-    (.mult (PVector. (Math/cos angle)
-                     (Math/sin angle))
-           grav)))
+                (Math/pow (p/dist pv1 pv2) 2))
+        angle (p/heading (p/sub pv2 pv1))]
+    (p/mul (Point. (Math/cos angle)
+                   (Math/sin angle))
+         grav)))
 
-(defn barnes-hut-apply [tree theta sv pvector mass]
+
+(defn barnes-hut-apply [tree theta pvector mass]
   (when tree
     (let [s (:dx (:bounds tree))
-          d (.dist pvector (:center tree))]
+          d (p/dist pvector (:center tree))]
       (when-not (zero? d)
         (if (> theta (/ s d))
-          (.add sv (get-force pvector mass (:center tree) (:mass tree)))
-          (do 
-            (barnes-hut-apply (:nw tree) theta sv pvector mass)
-            (barnes-hut-apply (:ne tree) theta sv pvector mass)
-            (barnes-hut-apply (:sw tree) theta sv pvector mass)
-            (barnes-hut-apply (:se tree) theta sv pvector mass)
-            (doseq [point (:points tree)]
-              (when-not (zero? (.dist pvector (:point @point)))
-                (.add sv (get-force pvector mass (:point @point) (:mass @point)))))
-            ))
-        )
-      sv)))
+          (get-force pvector mass (:center tree) (:mass tree))
+          (do
+            (reduce #(p/add %1 %2)
+                    (Point. 0 0)
+                    (filter #(not (nil? %))
+                            (concat [(barnes-hut-apply (:nw tree) theta pvector mass)
+                                     (barnes-hut-apply (:ne tree) theta pvector mass)
+                                     (barnes-hut-apply (:sw tree) theta pvector mass)
+                                     (barnes-hut-apply (:se tree) theta pvector mass)]
+                                    (for [point (:points tree)]
+                                      (if (< (p/dist pvector (:point point)) 10)
+                                        (Point. 0 0)
+                                        (get-force pvector mass (:point point) (:mass point)))))))))))))
 
 (defnp apply-forces [qtree theta particle]
-  (let [pvector (:force @particle)]
-    (.mult pvector 0)
-    (barnes-hut-apply qtree theta pvector (:point @particle) (:mass @particle))))
+  (barnes-hut-apply qtree
+                    theta
+                    (:point particle)
+                    (:mass particle)))
 
 (defn orbital-velocity [mass dist]
   (Math/sqrt (/ (* mass G) dist)))
 
-(let [cljp1 (Point. 1 1)
-      cljp2 (Point. 2 2)
-      pv1 (PVector. 1 1)
-      pv2 (PVector. 2 2)]
-  (profile
-   {}
-   (dotimes [_ 1000]
-     (p :pvector-add (.add pv1 pv2))
-     (p :clojure-add (add cljp1 cljp2)))))

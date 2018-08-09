@@ -1,7 +1,9 @@
 (ns quadgrav.particle
-  (:require [quadgrav.quadtree :refer [apply-forces orbital-velocity]])
-  (:import (processing.core PVector)))
-
+  (:require [quadgrav.quadtree :refer [apply-forces orbital-velocity]]
+            [quadgrav.point :as p]
+            [quadgrav.point :refer [IPoint]])
+  (:import [quadgrav.point Point])
+)
 
 (require '[taoensso.tufte :as tufte :refer (defnp p profiled profile)])
 
@@ -9,17 +11,16 @@
 
 (defn make-particle [mass x y xvel yvel xforce yforce on]
   (->Particle mass
-              (PVector. x y)
-              ;; (PVector. xvel yvel)
+              (Point. x y)
               (if (= x 500)
-                (PVector. xvel yvel)
-                (let [distance (.sub (PVector. x y) (PVector. 500 500))
+                (Point. xvel yvel)
+                (let [distance (p/sub (Point. x y) (Point. 500 500))
                       angle (+ (/ Math/PI 2) (.heading distance))]
-                  (.mult (PVector. (Math/cos angle)
+                  (p/mul (Point. (Math/cos angle)
                                    (Math/sin angle))
-                         (orbital-velocity 20000
-                                           (.mag distance)))))
-              (PVector. xforce yforce)
+                         (orbital-velocity 40000
+                                           (+ (rand 10) (.mag distance))))))
+              (Point. xforce yforce)
               on))
 
 (defnp check-bounds [particle xbound ybound]
@@ -47,15 +48,16 @@
   particle)
 
 (defn update-forces [particle tree theta]
-  (let [{f :force
-         v :vel
-         p :point
-         m :mass} @particle]
-    (apply-forces tree theta particle)
-    (.div f m)
-    (.add v f)
-    (.add p v))
-  particle)
+  (let [m (:mass particle)
+        f (apply-forces tree theta particle)
+        a (p/div f m)
+        v (p/add a (:vel particle))
+        p (p/add v (:point particle))]
+    (-> particle
+        (assoc :force f)
+        (assoc :vel v)
+        (assoc :point p))))
+
 
 (defn make-particle-updater [tree theta xbound ybound]
   (fn [particle]
