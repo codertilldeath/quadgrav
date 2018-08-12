@@ -1,6 +1,6 @@
 # quadgrav
 
-A Quil sketch designed to ... well, that part is up to you.
+A Quil sketch of the N-Body problem using the Barnes-Hut approximation algorihtm, which uses a quadtree to run at a complexity of n\*log(n) instead of n^2.
 
 ## Usage
 
@@ -12,7 +12,6 @@ REPL - run `(require 'quadgrav.core)`.
 
 ## License
 
-Copyright © 2016 FIXME
+Copyright © 2018
 
-Distributed under the Eclipse Public License either version 1.0 or (at
-your option) any later version.
+Distributed under the GNU Public License either version 3.0 or any later version.
